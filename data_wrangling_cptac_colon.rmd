@@ -1,0 +1,466 @@
+---
+title: "cptac2 colon"
+author: "Lizabeth Katsnelson"
+output: html_document
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+```
+
+```{r, message=FALSE, warning=FALSE}
+library(tidyverse)
+library(dplyr)
+library(plyr)
+library(AnnotationDbi)
+library(org.Hs.eg.db)
+library(biomaRt)
+library(data.table)
+```
+
+```{r}
+### set working dir
+setwd("~/Documents/GoogleSummerofCode/cptac2_downloads/CPTAC_colon_data/")
+
+### read in all files
+clinical <- read.table("Human__CPTAC_COAD__MS__Clinical__Clinical__03_01_2017__CPTAC__Clinical__BCM.tsi", sep='\t', header=T)
+#clinical
+clinical_1_year_followup <- read.csv("CPTAC_Colon_Cancer_Prospective_Collection_1Year_Followup.csv", sep=',', header=T)
+#clinical_1_year_followup
+sample <- read.table("CPTAC_COAD_Prospective_Biospecimens.txt", sep='\t', header=T)
+#sample
+#mutation <- read.csv("cptac_coad_oncotator_all.maf", sep='\t', header=T)
+#mutation
+cnv_segment <- read.table("colonPrspAfterSwapSegment.txt", sep='\t', header=T)
+#cnv_segment
+cnv_log2 <- read.table("Human__CPTAC_COAD__VU__SCNA__ExomeSeq__01_28_2016__BCM__Gene__BCM_CopyWriteR_GISTIC2.cct", sep='\t', header=T)
+#cnv_log2
+cnv_threshold <- read.table("Human__CPTAC_COAD__VU__SCNA__ExomeSeq__01_28_2016__BCM__Gene__BCM_CopyWriteR_GISTIC2_threshold.cct", sep='\t', header=T)
+#cnv_threshold
+rna <- read.table("Human__CPTAC_COAD__UNC__RNAseq__HiSeq_RNA__03_01_2017__BCM__Gene__BCM_RSEM_UpperQuartile_log2.cct", sep='\t', header=T)
+#rna
+miRNA <- read.table("Human__CPTAC_COAD__UNC__miRNAseq__GA_miR__03_01_2017__BCM__Gene__BCM_log2.cct", sep='\t', header=T)
+#miRNA
+protein <- read.table("Human__CPTAC_COAD__PNNL__Proteome__TMT__03_01_2017__BCM__Gene__PNNL_Tumor_TMT_UnsharedLogRatio.cct", sep='\t', header=T)
+#protein
+phospho <- read.table("Human__CPTAC_COAD__PNNL__Phosphoproteome__TMT__03_01_2017__BCM__Site__Tumor_PNNL_TMT_LogRatio.cct", sep='\t', header=T)
+#phospho
+```
+
+---
+
+
+## CLINICAL PATIENT
+```{r}
+# read in clinical data frame from linked omics 
+#### variables for dataframes changed to preserve original format in first variable
+meta <- clinical
+as_tibble(meta)
+
+## Transform data into proper format
+meta_transposed <- data.frame(t(meta)) # transpose data frame - patient id's = rows, attriubutes = columns
+colnames(meta_transposed) <- as.character(unlist(meta_transposed[1,])) # first row = colnames
+meta_transposed <- rownames_to_column(meta_transposed) # rownames = first column
+meta_transposed <-  meta_transposed[-1, ] # remove first row (turned into colnames)
+# capitalize colnames, change to proper names
+colnames(meta_transposed) <- c("PATIENT_ID", "AGE", "GENDER", "HISTOLOGY", "TUMOR_SITE", 
+                               "PATHOLOGY_T_STAGE", "PATHOLOGY_N_STAGE", "STAGE", "CEA", 
+                               "VASCULAR_INVASION", "LYMPHATIC_INVASION", "PERINEURAL_INVASION",
+                               "SYNCHRONOUS_TUMORS", "POLYPS_HISTORY", "POLYPS_PRESENT", 
+                               "TRANSCRIPTOMIC_SUBTYPE", "PROTEOMIC_SUBTYPE", "MUTATION_RATE",
+                               "survival_status", "tumor_status", "MUTATION_PHENOTYPE", "STROMAL_SCORE",
+                               "IMMUNE_SCORE", "ESTIMATE_SCORE", "TUMOR_PURITY", "IMMUNE_SUBTYPE", 
+                               "CIN", "INTEGRATED_PHENOTYPE") 
+meta_transposed$PATIENT_ID <- gsub(x = meta_transposed$PATIENT_ID, pattern = "X", replacement = "") # get rid of "X" in front of patient identifier number 
+meta_transposed$AGE <- as.numeric(as.character(meta_transposed$AGE)) 
+meta_transposed$AGE <- round(meta_transposed$AGE/12) # change age to years
+meta_transposed <- meta_transposed %>% mutate_all(as.character) # coerce all to characters 
+meta_transposed[is.na(meta_transposed)] <- "[Not Available]" # change NA's to "[Not Available]"
+as_tibble(meta_transposed)
+
+################################################################################
+
+# read in 1 year follow up clinical data frame from cptac
+clinical_1_year <- clinical_1_year_followup
+clinical_1_year <- clinical_1_year[, -c(2, 7:18, 20, 21:25)] # remove unwanted columns
+colnames(clinical_1_year) <- c("PATIENT_ID", "Days_Last_Contact", "OS_STATUS", 
+                               "Days_to_Death", "TUMOR_STATUS", "Days_to_New_Tumor") # change colnames
+clinical_1_year$OS_STATUS <- ifelse(clinical_1_year$OS_STATUS == "Living", "LIVING", "DECEASED")
+clinical_1_year$OS_MONTHS <- ifelse(is.na(clinical_1_year$Days_Last_Contact), 
+                                             clinical_1_year$Days_to_Death, 
+                                             clinical_1_year$Days_Last_Contact) # combine days to death and days to last contact into one column
+clinical_1_year$OS_MONTHS <- round(clinical_1_year$OS_MONTHS/12) # make days "months"
+#count(clinical_1_year$TUMOR_STATUS) # get factor levels for tumor status (tumor free, with tumor, not reportd/unknown, and unknown tumor status)
+clinical_1_year$DFS_STATUS <- ifelse(clinical_1_year$TUMOR_STATUS == "Tumor free", 
+                                     "DiseaseFree", "Recurred/Progressed") # add proper factors for "DFS"
+
+clinical_1_year$DFS_STATUS <- ifelse(clinical_1_year$TUMOR_STATUS == "Not Reported/ Unknown" | clinical_1_year$TUMOR_STATUS == "Unknown tumor status", 
+                                     "[Not Available]", 
+                                     clinical_1_year$DFS_STATUS) # add Not Available for unknown tumor status
+
+clinical_1_year$DFS_MONTHS <- ifelse(clinical_1_year$DFS_STATUS == "Recurred/Progressed", 
+                                     clinical_1_year$Days_to_New_Tumor, 
+                                     clinical_1_year$Days_Last_Contact) # add column for DFS_MONTHS
+
+clinical_1_year$DFS_MONTHS <- round(clinical_1_year$DFS_MONTHS/12)
+clinical_1_year$DFS_MONTHS <- ifelse(clinical_1_year$DFS_STATUS == "[Not Available]" | is.na(clinical_1_year$DFS_MONTHS), 
+                                     "[Not Available]", 
+                                     clinical_1_year$DFS_MONTHS) # add not avail
+as_tibble(clinical_1_year)
+
+################################################################################
+
+colon_clinical <- join(clinical_1_year, meta_transposed, type="full")
+colon_clinical <- colon_clinical %>% mutate_all(as.character) # coerce all to characters 
+colon_clinical[is.na(colon_clinical)] <- "[Not Available]" # change NA's to "[Not Available]"
+as_tibble(colon_clinical)
+
+### format clinical patient text file
+colon_clinical_patient <- data.frame(PATIENT_ID=colon_clinical$PATIENT_ID,
+                                     AGE=colon_clinical$AGE,
+                                     GENDER=colon_clinical$GENDER,
+                                     OS_STATUS=colon_clinical$OS_STATUS,
+                                     OS_MONTHS=colon_clinical$OS_MONTHS,
+                                     DFS_STATUS=colon_clinical$DFS_STATUS,
+                                     DFS_MONTHS=colon_clinical$DFS_MONTHS,
+                                     HISTOLOGY=colon_clinical$HISTOLOGY,
+                                     TUMOR_SITE=colon_clinical$TUMOR_SITE,
+                                     PATHOLOGY_T_STAGE=colon_clinical$PATHOLOGY_T_STAGE,
+                                     PATHOLOGY_N_STAGE=colon_clinical$PATHOLOGY_N_STAGE,
+                                     STAGE=colon_clinical$STAGE,
+                                     POLYPS_HISTORY=colon_clinical$POLYPS_HISTORY,
+                                     POLYPS_PRESENT=colon_clinical$POLYPS_PRESENT,
+                                     MUTATION_RATE=colon_clinical$MUTATION_RATE,
+                                     MUTATION_PHENOTYPE=colon_clinical$MUTATION_PHENOTYPE,
+                                     INTEGRATED_PHENOTYPE=colon_clinical$INTEGRATED_PHENOTYPE)
+as_tibble(colon_clinical_patient)
+
+### add header in text file
+#PATIENT_ID	AGE	GENDER	OS_STATUS	OS_MONTHS	DFS_STATUS	DFS_MONTHS	HISTOLOGY	TUMOR_SITE	PATHOLOGY_T_STAGE	PATHOLOGY_N_STAGE	STAGE	POLYPS_HISTORY	POLYPS_PRESENT	MUTATION_RATE	MUTATION_PHENOTYPE	INTEGRATED_PHENOTYPE
+#Patient unique identifier.	Patient age.	Patient gender.	Overal patient survival status.	Overal patient survival months.	Overal disease free status.	veral disease free months.	Tumor histology.	Tumor site.	Pathology T stage.	Pathology N stage.	Cancer stage.	History of polyps.	Polyps currently present.	Mutation rate of tumor.	Mutation Phenotype.	Integrated phenotype.
+#STRING	NUMBER	STRING	STRING	NUMBER	STRING	NUMBER	STRING	STRING	STRING	STRING	STRING	STRING	STRING	STRING	STRING	STRING
+#1	1	1	1	1	1	1	1	1	1	1	1	1	1	1	1	1
+
+#write.table(colon_clinical_patient, file = "cptac_colon_cbio_format/data_clinical_patient.txt", sep = "\t", col.names = T, row.names = F, quote = F)
+
+#read.table("cptac_colon_cbio_format/data_clinical_patient.txt", sep='\t', header=T)
+
+
+```
+
+---
+
+## CLNICAL SAMPLE 
+```{r}
+#### read in CPTAC data portal meta data
+sample_reformat <- sample 
+sample_reformat <- sample_reformat[-c(grep("Normal Tissue", sample_reformat$Specimen_Title)), ] # remove normal tissues
+sample_reformat[is.na(sample_reformat)] <- "[Not Available]" # change NA's to "[Not Available]"
+sample_reformat <- sample_reformat[, -c(2:3, 6:8)] # remove unwanted cols - specimen labels and tumor cellularity
+sample_reformat$Specimen_Type[sample_reformat$Specimen_Type == 'Frozen Tissue Block'] <- 'Frozen Tissue'
+colnames(sample_reformat) <- c("PATIENT_ID", "SPECIMEN_PRESERVATION", "PATHOLOGY_STATUS")
+sample_reformat <- unique(sample_reformat)
+sample_reformat
+
+### sequenced samples
+mutation <- mutation
+mutation_samples <- data.frame(sample_id = mutation$Tumor_Sample_Barcode)
+mutation_samples_unique <- unique(mutation_samples$sample_id)
+mutation_samples_unique # 106 samples
+SEQUENCED  <- data.frame(PATIENT_ID = mutation_samples_unique, SEQUENCED = rep(1))
+SEQUENCED
+
+### samples with CNV data
+cnv <- cnv_log2
+colnames(cnv) <- gsub(x = colnames(cnv), pattern = "X", replacement = "") # remove "X" from colnames string
+cnv_samples <- colnames(cnv)[2:106] # 105 samples
+COPY_NUMBER <- data.frame(PATIENT_ID = cnv_samples, COPY_NUMBER=rep(1))
+COPY_NUMBER
+
+### samples with mRNA data
+rna <- rna
+colnames(rna) <- gsub(x = colnames(rna), pattern = "X", replacement = "") # remove "X" from colnames string
+rna_samples <- colnames(rna)[2:107] # 106 samples
+MRNA_DATA <- data.frame(PATIENT_ID = rna_samples, MRNA_DATA=rep(1))
+MRNA_DATA
+
+### samples with miRNA data
+miRNA <- miRNA
+colnames(miRNA) <- gsub(x = colnames(miRNA), pattern = "X", replacement = "") # remove "X" from colnames string
+miRNA_samples <- colnames(miRNA)[2:106] # 105 samples
+MICRORNA_DATA <- data.frame(PATIENT_ID = miRNA_samples, MICRORNA_DATA=rep(1))
+MICRORNA_DATA
+
+### samples with proteome data
+protein <- protein
+colnames(protein) <- gsub(x = colnames(protein), pattern = "X", replacement = "") # remove "X" from colnames string
+protein_samples <- colnames(protein)[2:98] # 97 samples
+PROTEIN <- data.frame(PATIENT_ID = protein_samples, PROTEIN=rep(1))
+PROTEIN
+
+### samples with phosphoproteome data
+phospho <- phospho
+colnames(phospho) <- gsub(x = colnames(phospho), pattern = "X", replacement = "") # remove "X" from colnames string
+phospho_samples <- colnames(phospho)[1:97] # 97 samples
+PHOSPHOPROTEIN <- data.frame(PATIENT_ID = phospho_samples, PHOSPHOPROTEIN=rep(1))
+PHOSPHOPROTEIN
+
+### all datatypes
+all_data_types <- join(SEQUENCED, COPY_NUMBER, type="full")
+all_data_types <- join(all_data_types, MRNA_DATA, type="full")
+all_data_types <- join(all_data_types, MICRORNA_DATA, type="full")
+all_data_types <- join(all_data_types, PROTEIN, type="full")
+all_data_types <- join(all_data_types, PHOSPHOPROTEIN, type="full")
+all_data_types
+
+### meta data and datatypes
+meta_datatypes <- join(all_data_types, colon_clinical_patient, type="full") # add dataype columns to meta data
+meta_datatypes[is.na(meta_datatypes)] <- 0
+meta_datatypes
+
+### add sample info
+total_meta <- join(sample_reformat, meta_datatypes, type="full")
+total_meta$SPECIMEN_PRESERVATION <- as.character(total_meta$SPECIMEN_PRESERVATION)
+total_meta$PATHOLOGY_STATUS <- as.character(total_meta$PATHOLOGY_STATUS)
+total_meta[is.na(total_meta)] <- "[Not Available]" # change NA's to "[Not Available]"
+total_meta
+
+
+### reformat dataframe
+colon_sample <- data.frame("PATIENT_ID"=total_meta$PATIENT_ID,
+                           "SAMPLE_ID"=total_meta$PATIENT_ID,
+                           "SPECIMEN_PRESERVATION"=total_meta$SPECIMEN_PRESERVATION,
+                           "SEQUENCED"=total_meta$SEQUENCED,
+                           "COPY_NUMBER"=total_meta$COPY_NUMBER,
+                           "MRNA_DATA"=total_meta$MRNA_DATA,
+                           "MICRORNA_DATA"=total_meta$MICRORNA_DATA,
+                           "METHYLATION_STATUS"=rep(0),
+                           "PROTEIN"=total_meta$PROTEIN,
+                           "PHOSPHOPROTEIN"=total_meta$PHOSPHOPROTEIN,
+                           "MSI_STATUS"=total_meta$MUTATION_PHENOTYPE,
+                           "PATHOLOGY_STATUS"=total_meta$PATHOLOGY_STATUS,
+                           "PRIMARY_SITE"=total_meta$TUMOR_SITE,
+                           "CANCER_TYPE"=rep("Colon Adenocarcinoma"))
+colon_sample
+
+#write.table(colon_sample, file = "cptac_colon_cbio_format/data_clinical_sample.txt", sep = "\t", col.names = T, row.names = F, quote = F)
+
+### add header in text file
+#PATIENT_ID	SAMPLE_ID	SPECIMEN_PRESERVATION	SEQUENCED	COPY_NUMBER	MRNA_DATA	MICRORNA_DATA	METHYLATION_STATUS	PROTEIN	PHOSPHOPROTEIN	MSI_STATUS	PATHOLOGY_STATUS	PRIMARY_SITE	CANCER_TYPE
+#Patient unique identifier.	Sample tissue identifier.	Specimen preservation method.	Sequenced.	Copy number.	mRNA.	microRNA.	Methylation status.	Protein data.	Phosphoprotein data.	MSI data.	Pathology report.	Site of tumor.	Cancer type.
+#STRING	STRING	STRING	NUMBER	NUMBER	NUMBER	NUMBER	NUMBER	NUMBER	NUMBER	STRING	STRING	STRING	STRING
+#1	1	1	1	1	1	1	1	1	1	1	1	1	1
+
+# test
+#read.table("cptac_colon_cbio_format/data_clinical_sample.txt", sep='\t', header=T)
+```
+
+---
+
+## CNV
+```{r}
+## CNV Segment scores
+cnv_segment_reformat <- cnv_segment
+colnames(cnv_segment_reformat) <- c("ID", "chrom", "loc.start", "loc.end", "num.mark", "seg.mean")
+cnv_segment_reformat$chrom <- gsub(x = cnv_segment_reformat$chrom, pattern = "chr", replacement = "") # remove "chr" from chromosome string
+cnv_segment_reformat
+
+plyr::count(cnv_segment_reformat$chrom)
+
+#write.table(cnv_segment_reformat, file = "cptac_colon_cbio_format/data_cna_hg19.seg", sep = "\t", col.names = T, row.names = F, quote = F)
+#read.table("cptac_colon_cbio_format/data_cna_hg19.seg", sep = "\t", header = T)
+
+################################################################################
+
+## CNV GISTIC log2 ratio
+cnv_log2_reformat <- cnv_log2
+colnames(cnv_log2_reformat) <- gsub(x = colnames(cnv_log2_reformat), pattern = "X", replacement = "") # remove "X" from colnames string
+colnames(cnv_log2_reformat)[1] <- "Hugo_Symbol"
+cnv_log2_reformat$Hugo_Symbol <- as.character(cnv_log2_reformat$Hugo_Symbol)
+cnv_log2_reformat
+
+id_key <- read.table("Homo_sapiens.gene_info.txt", sep='\t', header=T) # get genes names to entrez id conversion
+id_key
+
+cnv_log2_reformat_ids <- join(id_key, cnv_log2_reformat, type="right")
+cnv_log2_reformat_ids
+
+colSums(is.na(cnv_log2_reformat_ids[1:2])) # 2392 NA's in entrez ID column
+
+#write.table(cnv_log2_reformat_ids, file = "cptac_colon_cbio_format/data_log2_CNA.txt", sep = "\t", col.names = T, row.names = F, quote = F)
+#read.table("cptac_colon_cbio_format/data_log2_CNA.txt", sep = "\t", header = T)
+
+################################################################################
+
+## CNV GISTIC Threhold Scores
+cnv_threshold_reformat <- cnv_threshold
+colnames(cnv_threshold_reformat) <- gsub(x = colnames(cnv_threshold_reformat), pattern = "X", replacement = "")
+colnames(cnv_threshold_reformat)[1] <- "Hugo_Symbol"
+cnv_threshold_reformat 
+
+cnv_threshold_reformat_ids <- join(id_key, cnv_threshold_reformat, type="right")
+cnv_threshold_reformat_ids
+
+colSums(is.na(cnv_threshold_reformat_ids[1:2])) # 2392 NA's in entrez ID column
+
+#write.table(cnv_threshold_reformat_ids, file = "cptac_colon_cbio_format/data_CNA.txt", sep = "\t", col.names = T, row.names = F, quote = F)
+#read.table("cptac_colon_cbio_format/data_CNA.txt", sep = "\t", header = T)
+
+```
+
+---
+
+## RNA
+```{r}
+## mRNA
+rna_reformat <- rna
+colnames(rna_reformat) <- gsub(x = colnames(rna_reformat), pattern = "X", replacement = "") # remove "X" from colnames string
+colnames(rna_reformat)[1] <- "Hugo_Symbol"
+rna_reformat$Hugo_Symbol <- as.character(rna_reformat$Hugo_Symbol)
+rna_reformat
+
+rna_reformat_ids <- join(id_key, rna_reformat, type="right")
+rna_reformat_ids
+
+colSums(is.na(rna_reformat_ids[1:2])) # 348 NA's in entrez ID column
+
+#write.table(rna_reformat_ids, file = "cptac_colon_cbio_format/data_RNA_Seq_v2_expression_RSEM_UQ_Log2.txt", sep = "\t", col.names = T, row.names = F, quote = F)
+#read.table("cptac_colon_cbio_format/data_RNA_Seq_v2_expression_RSEM_UQ_Log2.txt", sep = "\t", header = T)
+
+################################################################################
+
+## miRNA
+miRNA_reformat <- miRNA
+colnames(miRNA_reformat) <- gsub(x = colnames(miRNA_reformat), pattern = "X", replacement = "") # remove "X" from colnames string
+colnames(miRNA_reformat)[1] <- "Hugo_Symbol"
+miRNA_reformat$Hugo_Symbol <- as.character(miRNA_reformat$Hugo_Symbol)
+miRNA_reformat
+
+#write.table(miRNA_reformat, file = "cptac_colon_cbio_format/data_expression_miRNA.txt", sep = "\t", col.names = T, row.names = F, quote = F)
+#read.table("cptac_colon_cbio_format/data_expression_miRNA.txt", sep = "\t", header = T)
+```
+
+---
+
+## Protein
+```{r}
+## PROTEOME
+protein_reformat <- protein
+colnames(protein_reformat) <- gsub(x = colnames(protein_reformat), pattern = "X", replacement = "") # remove "X" from colnames string
+colnames(protein_reformat)[1] <- "Composite.Element.REF"
+protein_reformat$Composite.Element.REF <- as.character(protein_reformat$Composite.Element.REF)
+protein_reformat
+
+### fix naming in protein name column 
+prot <- data.frame(prot_string = protein_reformat$Composite.Element.REF, prot = protein_reformat$Composite.Element.REF) # new df with protein names
+prot$prot_string <- paste(prot$prot_string, "|") # add pipe to protein name string
+prot$total_name <- paste(prot$prot_string, prot$prot)
+prot
+
+### add proper names to protein dataset
+protein_corrected <- cbind(prot$total_name, protein_reformat) # added new column - proper naming
+protein_corrected <- protein_corrected[, -2] # remove previous names
+colnames(protein_corrected)[1] <- "Composite.Element.REF" 
+protein_corrected
+
+################################################################################
+
+## PHOSPHOPROTEOME
+phospho_reformat <- phospho
+phospho_reformat <- setDT(phospho_reformat, keep.rownames = TRUE)[] # make row names column 1
+colnames(phospho_reformat) <- gsub(x = colnames(phospho_reformat), pattern = "X", replacement = "") # remove "X" from colnames string
+colnames(phospho_reformat)[1] <- "Composite.Element.REF"
+phospho_reformat$Composite.Element.REF <- as.character(phospho_reformat$Composite.Element.REF)
+phospho_reformat$Composite.Element.REF <- gsub(x = phospho_reformat$Composite.Element.REF, pattern = "\\__.*", replacement = "") # remove long string
+phospho_reformat$Composite.Element.REF <- gsub(x = phospho_reformat$Composite.Element.REF, pattern = "\\_", replacement = "_p") # add "p" for phosphosite
+phospho_reformat
+
+### fix naming in phosphosite column 
+protein_names <- data.frame(prot = phospho_reformat$Composite.Element.REF, phospho = phospho_reformat$Composite.Element.REF) # new df with prot names
+protein_names$prot <- gsub(x = protein_names$prot, pattern = "\\_.*", replacement = "") # remove phosphosite to have just protein name
+protein_names$prot <- paste(protein_names$prot, "|") # add pipe to protein name
+protein_names$total_name <- paste(protein_names$prot, protein_names$phospho)
+protein_names
+
+### add proper names to phospho dataset
+phospho_corrected <- cbind(protein_names$total_name, phospho_reformat) # added new column - proper naming
+phospho_corrected <- phospho_corrected[, -2] # remove previous names
+colnames(phospho_corrected)[1] <- "Composite.Element.REF" 
+phospho_corrected
+
+################################################################################
+
+### Merge protein and phospho data to one dataframe
+total_protein <- rbind(protein_corrected, phospho_corrected)
+total_protein
+
+#write.table(total_protein, file = "cptac_colon_cbio_format/data_protein_quantification.txt", sep = "\t", col.names = T, row.names = F, quote = F)
+#read.table("cptac_colon_cbio_format/data_protein_quantification.txt", sep = "\t", header = T)
+
+```
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+### MUTATION
+```{r}
+mutation <- mutation
+plyr::count(mutation$Variant_Classification)
+
+# check how many samples
+#mutation_samples <- data.frame(sample_id = mutation$SampleID)
+#mutation_samples_unique <- unique(mutation_samples$sample_id)
+#mutation_samples_unique # 106 samples
+
+### cbio maf columns: 
+# 1. Hugo_Symbol (Required)
+# 2. Tumor_Sample_Barcode (Required)
+# 3. Variant_Classification (Required) 
+  ## Frame_Shift_Del, Frame_Shift_Ins, In_Frame_Del, In_Frame_Ins, 
+  ## Missense_Mutation, Nonsense_Mutation, Silent, Splice_Site, Translation_Start_Site, Nonstop_Mutation, 
+  ## 3'UTR, 3'Flank, 5'UTR, 5'Flank, 
+  ## IGR, Intron, RNA, Targeted_Region, De_novo_Start_InFrame, De_novo_Start_OutOfFrame
+
+  ### cBioPortal skips the following types during the import: Silent, Intron, 3'UTR, 3'Flank, 5'UTR, 5'Flank, IGR and RNA. 
+  ### Two extra values are allowed by cBioPortal here as well: Splice_Region, Unknown
+
+# 4. HGVSp_Short (Required) AA change ie: p.V600E.
+# 5. Entrez_Gene_Id (Optional, but recommended) 
+# 6. Protein_position (Optional)
+# 7. SWISSPROT (Optional)
+
+
+## unsure what to change to: Start_Codon_Del, Start_Codon_Ins, Start_Codon_SNP, Stop_Codon_Del, Stop_Codon_Ins
+
+maf_filtered <- data.frame(Hugo_Symbol = mutation$Hugo_Symbol,
+                           Tumor_Sample_Barcode = mutation$Tumor_Sample_Barcode,
+                           Variant_Classification = mutation$Variant_Classification, 
+                           HGVSp_Short = mutation$Protein_Change,
+                           Entrez_Gene_Id = mutation$Entrez_Gene_Id,
+                           Protein_position = mutation$Transcript_Position,
+                           SWISSPROT = mutation$SwissProt_acc_Id)
+
+maf_filtered$Variant_Classification <- gsub('lincRNA', 'RNA', maf_filtered$Variant_Classification) # change lincRNA to RNA
+#plyr::count(maf_filtered$Variant_Classification)
+maf_filtered
+
+
+```
+
+
+
+
+
