@@ -11,4 +11,6 @@ This repository holds the scripts used to reformat CPTAC datasets for compatabil
 * Test the data visualiztion tools within the internal private portal
 * Data passes internal portal tests - published to public portal for use
 
-** Note: ** unpublished datasets will not be uploaded to the portal until CPTAC collaborators successfully publish their work. Unpublished datasets or embargo'd datasets are stored in the private portal.
+**Note:** unpublished datasets will not be uploaded to the portal until CPTAC collaborators successfully publish their work. Unpublished datasets or embargo'd datasets are stored in the private portal.
+
+For more information on cBio Portal for Cancer Genomics, visit their website: https://www.cbioportal.org/
