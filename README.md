@@ -16,7 +16,7 @@ This repository holds the scripts used to reformat CPTAC datasets for compatabil
 
 **Note:** unpublished datasets will not be uploaded to the portal until CPTAC collaborators successfully publish their work. Unpublished datasets or embargo'd datasets are stored in the private portal.
 
-*As of 08/2019, the only dataset that was allowed to be public was the COAD (colon adenocarcinoma) dataset. Here is the link to that dataset in the public datahub: https://github.com/cBioPortal/datahub/tree/master/public/coad_cptac_2019* 
+*As of 08/2019, the only dataset that was allowed to be public was the COAD (colon adenocarcinoma) dataset. Here is the link to that dataset in the cBio Portal: https://www.cbioportal.org/study/summary?id=coad_cptac_2019* 
 
 **Acknowledgments**
 
